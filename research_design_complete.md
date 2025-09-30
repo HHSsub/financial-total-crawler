@@ -1,4 +1,3 @@
-```markdown
 # 데이터 자산과 기업 가치에 관한 통합 연구 설계
 ## Integrated Research Design for Data Asset and Corporate Value Analysis
 
@@ -452,6 +451,3 @@ $$
 * 금융감독원 전자공시시스템 OpenDART 개발가이드: [https://opendart.fss.or.kr/guide/main.do?apiGrpCd=DS001](https://opendart.fss.or.kr/guide/main.do?apiGrpCd=DS001)
 * pykrx GitHub Repository: [https://github.com/sharebook-kr/pykrx](https://github.com/sharebook-kr/pykrx)
 * 한국거래소(KRX) 시장 데이터 시스템: [https://data.krx.co.kr/](https://data.krx.co.kr/)
-
-```
-```
