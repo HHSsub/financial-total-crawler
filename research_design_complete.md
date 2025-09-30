@@ -21,11 +21,11 @@
 
 | 변수명 | XBRL 태그 | 한글 계정명 | 정의 |
 |--------|-----------|-------------|------|
-| $Assets_{i,t}$      | $\mathrm{ifrs\text{-}full\_Assets}$      | 자산총계, 총자산   | 기업 $i$의 시점 $t$에서의 총 자산 |
-| $Liabilities_{i,t}$ | $\mathrm{ifrs\text{-}full\_Liabilities}$ | 부채총계, 총부채   | 기업 $i$의 시점 $t$에서의 총 부채 |
-| $Equity_{i,t}$      | $\mathrm{ifrs\text{-}full\_Equity}$      | 자본총계, 총자본   | 기업 $i$의 시점 $t$에서의 총 자본 |
-| $Revenue_{i,t}$     | $\mathrm{ifrs\text{-}full\_Revenue}$     | 매출액, 영업수익   | 기업 $i$의 시점 $t$에서의 총 매출액 |
-| $ProfitLoss_{i,t}$  | $\mathrm{ifrs\text{-}full\_ProfitLoss}$  | 당기순이익, 순이익 | 기업 $i$의 시점 $t$에서의 당기순이익 |
+| $Assets_{i,t}$ | $\mathrm{ifrs\text{-}full\_Assets}$ | 자산총계, 총자산 | 기업 $i$의 시점 $t$에서의 총 자산 |
+| $Liabilities_{i,t}$ | $\mathrm{ifrs\text{-}full\_Liabilities}$ | 부채총계, 총부채 | 기업 $i$의 시점 $t$에서의 총 부채 |
+| $Equity_{i,t}$ | $\mathrm{ifrs\text{-}full\_Equity}$ | 자본총계, 총자본 | 기업 $i$의 시점 $t$에서의 총 자본 |
+| $Revenue_{i,t}$ | $\mathrm{ifrs\text{-}full\_Revenue}$ | 매출액, 영업수익 | 기업 $i$의 시점 $t$에서의 총 매출액 |
+| $ProfitLoss_{i,t}$ | $\mathrm{ifrs\text{-}full\_ProfitLoss}$ | 당기순이익, 순이익 | 기업 $i$의 시점 $t$에서의 당기순이익 |
 
 #### 보고서 우선순위 및 수집 제약사항
 
@@ -284,10 +284,10 @@ $$
 + \varepsilon_{i,t}
 $$
 
-여기서:
-- $InfoGroup_i \in \{0,1\}$: 정보집약적 기업 더미
-- $D_t$: 연도 더미 변수
-- $\varepsilon_{i,t}$: 오차항
+여기서:  
+- $InfoGroup_i \in \{0,1\}$: 정보집약적 기업 더미  
+- $D_t$: 연도 더미 변수  
+- $\varepsilon_{i,t}$: 오차항  
 
 ### 6.2 고정효과 모형 (Fixed Effects Model)
 
@@ -333,7 +333,7 @@ $$
 + \varepsilon_{i,t}
 $$
 
-여기서 $u_i \sim N(0,\ \sigma^2)$는 개체별 임의효과
+여기서 $u_i \sim N(0,\, \sigma^2)$는 개체별 임의효과
 
 ---
 
@@ -370,15 +370,11 @@ $$
 | 구분 | 파라미터 | 설정값 | 설명 |
 |------|----------|--------|------|
 | DART API | 일일 요청 한도 | 20,000건 | API 호출 제한 |
-| DART API | 검색 기간 제한 | 3개월 | corp\_code 없이 검색 시 |
+| DART API | 검색 기간 제한 | 3개월 | corp_code 없이 검색 시 |
 | 네이버 API | 기업당 최대 기사수 | 500개 | 데이터 균형성 확보 |
 | 네이버 API | 요청 지연시간 | 0.1초 | 서버 부하 방지 |
 | KRX 수집 | 호출 간 대기시간 | 0.6초 | 안정적 데이터 수집 |
-| KRX 수집 | 최대
-```
-
-
-재시도 횟수 | 3회 | 네트워크 오류 대응 |
+| KRX 수집 | 최대 재시도 횟수 | 3회 | 네트워크 오류 대응 |
 
 ### 8.2 데이터 처리 제약사항
 
@@ -395,9 +391,9 @@ $$
 
 ### 9.1 검색어 생성 방식
 
-| 구분     | 기준/공식                                  | 설명                  |      |     |                          |                      |
+| 구분     | 기준/공식 | 설명 |      |     |                          |                      |
 | ------ | -------------------------------------- | ------------------- | ---- | --- | ------------------------ | -------------------- |
-| 검색어 생성 | `company_name` 및 `re.sub(r'주식회사$       | ㈜                   | 주식회사 | （주） | (주)', '', company_name)` | 정식명칭 + 약칭으로 검색 범위 확대 |
+| 검색어 생성 | `company_name` 및 `re.sub(r'주식회사$|㈜|주식회사|（주）|(주)', '', company_name)` | 정식명칭 + 약칭으로 검색 범위 확대 |
 | 중복 제거  | `link in self.collected_links_session` | 기사 링크(URL) 기준 중복 방지 |      |     |                          |                      |
 
 ### 9.2 키워드 매칭 프로세스
@@ -447,7 +443,7 @@ $$
 
 **참고문헌 (References)**
 
-* 금융감독원 전자공시시스템 (DART): [https://dart.fss.or.kr/](https://dart.fss.or.kr/)
-* 금융감독원 전자공시시스템 OpenDART 개발가이드: [https://opendart.fss.or.kr/guide/main.do?apiGrpCd=DS001](https://opendart.fss.or.kr/guide/main.do?apiGrpCd=DS001)
-* pykrx GitHub Repository: [https://github.com/sharebook-kr/pykrx](https://github.com/sharebook-kr/pykrx)
-* 한국거래소(KRX) 시장 데이터 시스템: [https://data.krx.co.kr/](https://data.krx.co.kr/)
+* 금융감독원 전자공시시스템 (DART): https://dart.fss.or.kr/
+* 금융감독원 전자공시시스템 OpenDART 개발가이드: https://opendart.fss.or.kr/guide/main.do?apiGrpCd=DS001
+* pykrx GitHub Repository: https://github.com/sharebook-kr/pykrx
+* 한국거래소(KRX) 시장 데이터 시스템: https://data.krx.co.kr/
