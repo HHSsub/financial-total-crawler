@@ -21,11 +21,12 @@
 
 | 변수명 | XBRL 태그 | 한글 계정명 | 정의 |
 |--------|-----------|-------------|------|
-| $Assets_{i,t}$ | `\mathrm{ifrs\text{-}full\_Assets}` | 자산총계, 총자산 | 기업 $i$의 시점 $t$에서의 총 자산 |
-| $Liabilities_{i,t}$ | `\mathrm{ifrs\text{-}full\_Liabilities}` | 부채총계, 총부채 | 기업 $i$의 시점 $t$에서의 총 부채 |
-| $Equity_{i,t}$ | `\mathrm{ifrs\text{-}full\_Equity}` | 자본총계, 총자본 | 기업 $i$의 시점 $t$에서의 총 자본 |
-| $Revenue_{i,t}$ | `\mathrm{ifrs\text{-}full\_Revenue}` | 매출액, 영업수익 | 기업 $i$의 시점 $t$에서의 총 매출액 |
-| $ProfitLoss_{i,t}$ | `\mathrm{ifrs\text{-}full\_ProfitLoss}` | 당기순이익, 순이익 | 기업 $i$의 시점 $t$에서의 당기순이익 |
+| $Assets_{i,t}$      | $\mathrm{ifrs\text{-}full\_Assets}$      | 자산총계, 총자산   | 기업 $i$의 시점 $t$에서의 총 자산 |
+| $Liabilities_{i,t}$ | $\mathrm{ifrs\text{-}full\_Liabilities}$ | 부채총계, 총부채   | 기업 $i$의 시점 $t$에서의 총 부채 |
+| $Equity_{i,t}$      | $\mathrm{ifrs\text{-}full\_Equity}$      | 자본총계, 총자본   | 기업 $i$의 시점 $t$에서의 총 자본 |
+| $Revenue_{i,t}$     | $\mathrm{ifrs\text{-}full\_Revenue}$     | 매출액, 영업수익   | 기업 $i$의 시점 $t$에서의 총 매출액 |
+| $ProfitLoss_{i,t}$  | $\mathrm{ifrs\text{-}full\_ProfitLoss}$  | 당기순이익, 순이익 | 기업 $i$의 시점 $t$에서의 당기순이익 |
+
 
 #### 보고서 우선순위 및 수집 제약사항
 
