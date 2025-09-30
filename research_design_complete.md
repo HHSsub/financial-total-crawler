@@ -27,7 +27,6 @@
 | $Revenue_{i,t}$     | $\mathrm{ifrs\text{-}full\_Revenue}$     | 매출액, 영업수익   | 기업 $i$의 시점 $t$에서의 총 매출액 |
 | $ProfitLoss_{i,t}$  | $\mathrm{ifrs\text{-}full\_ProfitLoss}$  | 당기순이익, 순이익 | 기업 $i$의 시점 $t$에서의 당기순이익 |
 
-
 #### 보고서 우선순위 및 수집 제약사항
 
 | 우선순위 | reprt_code | 보고서명 | 기준일 |
@@ -285,7 +284,29 @@ $$
 ### 6.2 고정효과 모형 (Fixed Effects Model)
 
 $$
-(\mathrm{Tobin's\ Q}_{i,t} - \overline{\mathrm{Tobin's\ Q}_i}) = \beta_1 (Sentiment_{i,t}^{\mathrm{std}} - \overline{Sentiment_i^{\mathrm{std}}}) + \beta_2 (Sentiment_{i,t}^{\mathrm{std}} \times InfoGroup_i - \overline{Sentiment_i^{\mathrm{std}} \times InfoGroup_i}) + \sum (X_{k,i,t} - \overline{X_{k,i}}) + (D_t - \overline{D_t}) + (\varepsilon_{i,t} - \overline{\varepsilon_{i}})
+\left(
+    \mathrm{Tobin's\ Q}_{i,t} - \overline{\mathrm{Tobin's\ Q}_i}
+\right)
+=
+\beta_1 \left(
+    \mathrm{Sentiment}_{i,t}^{\mathrm{std}} - \overline{\mathrm{Sentiment}_i^{\mathrm{std}}}
+\right)
++
+\beta_2 \left(
+    \mathrm{Sentiment}_{i,t}^{\mathrm{std}} \times \mathrm{InfoGroup}_i - \overline{\mathrm{Sentiment}_i^{\mathrm{std}} \times \mathrm{InfoGroup}_i}
+\right)
++
+\sum_k \left(
+    X_{k,i,t} - \overline{X_{k,i}}
+\right)
++
+\left(
+    D_t - \overline{D_t}
+\right)
++
+\left(
+    \varepsilon_{i,t} - \overline{\varepsilon_{i}}
+\right)
 $$
 
 개체별 고정효과를 제거한 집단 내(within) 추정량 사용
