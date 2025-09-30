@@ -1,3 +1,4 @@
+```markdown
 # 데이터 자산과 기업 가치에 관한 통합 연구 설계
 ## Integrated Research Design for Data Asset and Corporate Value Analysis
 
@@ -39,9 +40,9 @@
 #### 숫자 값 전처리 (safe_parse_num 함수)
 
 $$
-\mathrm{ParsedValue} = 
+\mathrm{ParsedValue} =
 \begin{cases}
-\text{None} & \text{if } x \text{ is None or in } \{ \text{'nan'}, \text{'none'}, \text{'null'}, \text{'-'} \} \\
+\text{None} & \text{if } x \text{ is None or in } \{\text{nan},\ \text{none},\ \text{null},\ \text{-}\} \\
 -|x| & \text{if } x \text{ is in format } (\text{value}) \\
 \mathrm{float}(x) & \text{otherwise}
 \end{cases}
@@ -66,7 +67,7 @@ $$
 #### 종목코드 표준화
 
 $$
-\text{Standardized Stock Code} = \mathrm{zero\text{-}fill}(\mathrm{extract\_digits}(S), 6)
+\text{Standardized Stock Code} = \mathrm{zero\text{-}fill}\bigl(\mathrm{extract\_digits}(S),\ 6\bigr)
 $$
 
 여기서:
@@ -244,10 +245,10 @@ $$
 극단치 처리를 위한 1%, 99% 분위수 기준 적용:
 
 $$
-X_{\mathrm{winsorized}} = 
+X_{\mathrm{winsorized}} =
 \begin{cases}
 Q_{0.01} & \text{if } X < Q_{0.01} \\
-X & \text{if } Q_{0.01} \leq X \leq Q_{0.99} \\
+X & \text{if } Q_{0.01} \le X \le Q_{0.99} \\
 Q_{0.99} & \text{if } X > Q_{0.99}
 \end{cases}
 $$
@@ -273,40 +274,49 @@ $$
 ### 6.1 기본 OLS 모형
 
 $$
-\mathrm{Tobin's\ Q}_{i,t} = \beta_0 + \beta_1 Sentiment_{i,t}^{\mathrm{std}} + \beta_2 InfoGroup_i + \beta_3 (Sentiment_{i,t}^{\mathrm{std}} \times InfoGroup_i) + \beta_4 Size_{i,t}^{\mathrm{std}} + \beta_5 Leverage_{i,t}^{\mathrm{std}} + \sum D_t + \varepsilon_{i,t}
+\mathrm{Tobin's\ Q}_{i,t} =
+\beta_0
++ \beta_1 Sentiment_{i,t}^{\mathrm{std}}
++ \beta_2 InfoGroup_i
++ \beta_3 \bigl(Sentiment_{i,t}^{\mathrm{std}} \times InfoGroup_i\bigr)
++ \beta_4 Size_{i,t}^{\mathrm{std}}
++ \beta_5 Leverage_{i,t}^{\mathrm{std}}
++ \sum D_t
++ \varepsilon_{i,t}
 $$
 
 여기서:
-- $InfoGroup_i \in \{0, 1\}$: 정보집약적 기업 더미
+- $InfoGroup_i \in \{0,1\}$: 정보집약적 기업 더미
 - $D_t$: 연도 더미 변수
 - $\varepsilon_{i,t}$: 오차항
 
 ### 6.2 고정효과 모형 (Fixed Effects Model)
 
 $$
-\left(
+\bigl(
     \mathrm{Tobin's\ Q}_{i,t} - \overline{\mathrm{Tobin's\ Q}_i}
-\right)
+\bigr)
 =
-\beta_1 \left(
+\beta_1 \bigl(
     \mathrm{Sentiment}_{i,t}^{\mathrm{std}} - \overline{\mathrm{Sentiment}_i^{\mathrm{std}}}
-\right)
+\bigr)
 +
-\beta_2 \left(
-    \mathrm{Sentiment}_{i,t}^{\mathrm{std}} \times \mathrm{InfoGroup}_i - \overline{\mathrm{Sentiment}_i^{\mathrm{std}} \times \mathrm{InfoGroup}_i}
-\right)
+\beta_2 \bigl(
+    \mathrm{Sentiment}_{i,t}^{\mathrm{std}} \times \mathrm{InfoGroup}_i
+    - \overline{\mathrm{Sentiment}_i^{\mathrm{std}} \times \mathrm{InfoGroup}_i}
+\bigr)
 +
-\sum_k \left(
+\sum_k \bigl(
     X_{k,i,t} - \overline{X_{k,i}}
-\right)
+\bigr)
 +
-\left(
+\bigl(
     D_t - \overline{D_t}
-\right)
+\bigr)
 +
-\left(
+\bigl(
     \varepsilon_{i,t} - \overline{\varepsilon_{i}}
-\right)
+\bigr)
 $$
 
 개체별 고정효과를 제거한 집단 내(within) 추정량 사용
@@ -314,10 +324,17 @@ $$
 ### 6.3 혼합효과 모형 (Mixed Effects Model)
 
 $$
-\mathrm{Tobin's\ Q}_{i,t} = \beta_0 + \beta_1 Sentiment_{i,t}^{\mathrm{std}} + \beta_2 InfoGroup_i + \beta_3 (Sentiment_{i,t}^{\mathrm{std}} \times InfoGroup_i) + \sum_{k=4}^{6} \beta_k X_{k,i,t} + u_i + \varepsilon_{i,t}
+\mathrm{Tobin's\ Q}_{i,t} =
+\beta_0
++ \beta_1 Sentiment_{i,t}^{\mathrm{std}}
++ \beta_2 InfoGroup_i
++ \beta_3 \bigl(Sentiment_{i,t}^{\mathrm{std}} \times InfoGroup_i\bigr)
++ \sum_{k=4}^{6} \beta_k X_{k,i,t}
++ u_i
++ \varepsilon_{i,t}
 $$
 
-여기서 $u_i \sim N(0, \sigma^2)$는 개체별 임의효과
+여기서 $u_i \sim N(0,\ \sigma^2)$는 개체별 임의효과
 
 ---
 
@@ -358,16 +375,20 @@ $$
 | 네이버 API | 기업당 최대 기사수 | 500개 | 데이터 균형성 확보 |
 | 네이버 API | 요청 지연시간 | 0.1초 | 서버 부하 방지 |
 | KRX 수집 | 호출 간 대기시간 | 0.6초 | 안정적 데이터 수집 |
-| KRX 수집 | 최대 재시도 횟수 | 3회 | 네트워크 오류 대응 |
+| KRX 수집 | 최대
+```
+
+
+재시도 횟수 | 3회 | 네트워크 오류 대응 |
 
 ### 8.2 데이터 처리 제약사항
 
-| 구분 | 제약사항 | 설정값 | 목적 |
-|------|----------|--------|------|
-| 본문 길이 | 최대 길이 | 5,000자 | 처리 효율성 |
-| 동시 요청수 | 비동기 처리 | 20개 | 서버 부하 조절 |
-| 타임아웃 | 요청 대기시간 | 15초 | 안정성 확보 |
-| 검색어 변형 | 최대 개수 | 3개 | 검색 포괄성 |
+| 구분     | 제약사항    | 설정값    | 목적       |
+| ------ | ------- | ------ | -------- |
+| 본문 길이  | 최대 길이   | 5,000자 | 처리 효율성   |
+| 동시 요청수 | 비동기 처리  | 20개    | 서버 부하 조절 |
+| 타임아웃   | 요청 대기시간 | 15초    | 안정성 확보   |
+| 검색어 변형 | 최대 개수   | 3개     | 검색 포괄성   |
 
 ---
 
@@ -375,10 +396,10 @@ $$
 
 ### 9.1 검색어 생성 방식
 
-| 구분 | 기준/공식 | 설명 |
-|------|----------|------|
-| 검색어 생성 | `company_name` 및 `re.sub(r'주식회사$|㈜|주식회사|（주）|\(주\)', '', company_name)` | 정식명칭 + 약칭으로 검색 범위 확대 |
-| 중복 제거 | `link in self.collected_links_session` | 기사 링크(URL) 기준 중복 방지 |
+| 구분     | 기준/공식                                  | 설명                  |      |     |                          |                      |
+| ------ | -------------------------------------- | ------------------- | ---- | --- | ------------------------ | -------------------- |
+| 검색어 생성 | `company_name` 및 `re.sub(r'주식회사$       | ㈜                   | 주식회사 | （주） | (주)', '', company_name)` | 정식명칭 + 약칭으로 검색 범위 확대 |
+| 중복 제거  | `link in self.collected_links_session` | 기사 링크(URL) 기준 중복 방지 |      |     |                          |                      |
 
 ### 9.2 키워드 매칭 프로세스
 
@@ -392,21 +413,21 @@ $$
 
 ### 10.1 데이터 소스 한계
 
-- **pykrx 라이브러리**: 웹 스크래핑 기반으로 KRX 웹사이트 구조 변경에 민감
-- **네이버 뉴스 API**: 검색 결과 상위 1,000개 기사로 제한
-- **DART API**: 비정형 텍스트 데이터의 정형화 한계
+* **pykrx 라이브러리**: 웹 스크래핑 기반으로 KRX 웹사이트 구조 변경에 민감
+* **네이버 뉴스 API**: 검색 결과 상위 1,000개 기사로 제한
+* **DART API**: 비정형 텍스트 데이터의 정형화 한계
 
 ### 10.2 방법론적 한계
 
-- **키워드 기반 감성분석**: 맥락적 의미 파악 제한
-- **인과관계 추론**: 횡단면적 상관관계 분석의 한계  
-- **표본 선택 편의**: 상장기업으로 한정된 분석 범위
+* **키워드 기반 감성분석**: 맥락적 의미 파악 제한
+* **인과관계 추론**: 횡단면적 상관관계 분석의 한계
+* **표본 선택 편의**: 상장기업으로 한정된 분석 범위
 
 ### 10.3 통계적 고려사항
 
-- **패널 데이터 불균형**: 기업별 관측 기간 차이
-- **생존 편의**: 상장폐지 기업 데이터 부족
-- **시점 효과**: 거시경제 환경 변화의 영향
+* **패널 데이터 불균형**: 기업별 관측 기간 차이
+* **생존 편의**: 상장폐지 기업 데이터 부족
+* **시점 효과**: 거시경제 환경 변화의 영향
 
 ---
 
@@ -427,7 +448,10 @@ $$
 
 **참고문헌 (References)**
 
-- 금융감독원 전자공시시스템 (DART): https://dart.fss.or.kr/
-- 금융감독원 전자공시시스템 OpenDART 개발가이드: https://opendart.fss.or.kr/guide/main.do?apiGrpCd=DS001
-- pykrx GitHub Repository: https://github.com/sharebook-kr/pykrx  
-- 한국거래소(KRX) 시장 데이터 시스템: https://data.krx.co.kr/
+* 금융감독원 전자공시시스템 (DART): [https://dart.fss.or.kr/](https://dart.fss.or.kr/)
+* 금융감독원 전자공시시스템 OpenDART 개발가이드: [https://opendart.fss.or.kr/guide/main.do?apiGrpCd=DS001](https://opendart.fss.or.kr/guide/main.do?apiGrpCd=DS001)
+* pykrx GitHub Repository: [https://github.com/sharebook-kr/pykrx](https://github.com/sharebook-kr/pykrx)
+* 한국거래소(KRX) 시장 데이터 시스템: [https://data.krx.co.kr/](https://data.krx.co.kr/)
+
+```
+```
