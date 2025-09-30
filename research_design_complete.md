@@ -105,44 +105,113 @@ $$
 
 ---
 
-## 3. 변수 정의 및 구성 (Variable Definition and Construction)
+## 3. 변수 정의 및 측정
 
-### 3.1 종속변수 (Dependent Variables)
+### 3.1 종속변수
 
-#### 토빈의 Q (Tobin's Q)
-
-$$
-\mathrm{Tobin's\ Q}_{i,t} = \frac{MarketCap_{i,t} + Liabilities_{i,t}}{Assets_{i,t}}
-$$
-
-#### 주가순자산비율 (PBR)
+#### 3.1.1 시장가치 대 장부가치 비율 (MBV)
+기업의 시장 가치 대 장부 가치 비율로 기업 가치의 대리변수로 활용:
 
 $$
-\mathrm{PBR}_{i,t} = \frac{MarketCap_{i,t}}{Equity_{i,t}}
+MBV = \frac{\mathrm{market\_cap\_krw}}{\mathrm{자본총계}}
 $$
 
-### 3.2 독립변수 (Independent Variables)
-
-#### 기업 규모 (Size)
+로그 변환을 통한 정규성 확보:
 
 $$
-\mathrm{Size}_{i,t} = \ln(Assets_{i,t} + 1)
+log\_MBV = \ln(MBV)
 $$
 
-#### 레버리지 (Leverage)
+### 3.2 독립변수
 
+#### 3.2.1 뉴스 감성 변수
+연간 뉴스 기사를 기반으로 다음과 같은 감성 지표를 계산:
+
+- 긍정 확률 평균 (positive\_mean): 연간 뉴스 기사의 긍정 확률 평균  
+- 감성 점수 (sentiment\_score):  
+  $$
+  SentimentScore = PositiveMean - NegativeMean
+  $$
+- 감성 변동성 (sentiment\_volatility):  
+  $$
+  SentimentVolatility = \operatorname{std}(PositiveProbability)
+  $$
+- 감성 범위 (sentiment\_range):  
+  $$
+  SentimentRange = PositiveMax - PositiveMin
+  $$
+
+#### 3.2.2 회계 정보량 그룹 (InfoGroup)
+기업의 회계 정보량에 따른 더미 변수:
+
+- 하위권 기업: 1  
+- 상위권 기업: 0
+
+### 3.3 통제변수
+
+#### 3.3.1 재무 변수
+- 레버리지 (Leverage)  
+  $$
+  Leverage = \frac{\mathrm{부채총계}}{\mathrm{자산총계}}
+  $$
+
+- 총자산순이익률 (ROA)  
+  $$
+  ROA = \frac{\mathrm{당기순이익}}{\mathrm{자산총계}}
+  $$
+
+- 자기자본순이익률 (ROE)  
+  $$
+  ROE = \frac{\mathrm{당기순이익}}{\mathrm{자본총계}}
+  $$
+
+- 총자산회전율 (Asset Turnover)  
+  $$
+  Asset\_Turnover =
+  \begin{cases}
+  \dfrac{\mathrm{매출액}}{\mathrm{자산총계}} & \text{if 매출액} > 0 \\
+  0 & \text{otherwise}
+  \end{cases}
+  $$
+
+- 매출액순이익률 (Profit Margin)  
+  $$
+  Profit\_Margin =
+  \begin{cases}
+  \dfrac{\mathrm{당기순이익}}{\mathrm{매출액}} & \text{if 매출액} > 0 \\
+  \mathrm{NaN} & \text{otherwise}
+  \end{cases}
+  $$
+
+#### 3.3.2 기업 규모 변수
+로그 총자산 (log\_assets)  
 $$
-\mathrm{Leverage}_{i,t} = \frac{Liabilities_{i,t}}{Assets_{i,t}}
+log\_assets = \ln(\mathrm{total\_assets})
 $$
 
-#### 뉴스 감성 지수 (News Sentiment Index)
-데이터 자산 관련 키워드가 매칭된 기사 수를 기반으로 구성
+#### 3.3.3 뉴스 관련 통제 변수
+- 로그 뉴스 개수 (log\_news\_count)  
+  $$
+  log\_news\_count = \ln(\mathrm{news\_count})
+  $$
 
-### 3.3 통제변수 (Control Variables)
+- 뉴스 강도 (news\_intensity)  
+  $$
+  NewsIntensity = \frac{\mathrm{news\_count}}{\max(\mathrm{news\_count})}
+  $$
 
-- 산업 더미변수 (Industry Dummies)
-- 연도 더미변수 (Year Dummies)  
-- 기업 고정효과 (Firm Fixed Effects)
+- 뉴스 품질 더미 (news\_quality)  
+  $$
+  NewsQuality = I\bigl(\mathrm{news\_count} \ge 5\bigr)
+  $$
+
+### 3.4 데이터 자산 관련 변수
+데이터 자산 관련성은 텍스트 내 키워드 출현 여부를 통해 측정되며,  
+5개 하위 카테고리로 분류된 총 40개의 구체적인 키워드 집합을 정의:
+
+1. 사전 필터링: 기사 제목과 요약 텍스트에 키워드 포함 여부 확인  
+2. 본문 포함 최종 매칭: 제목 + 요약 + 본문 전체 텍스트에서 키워드 재검색  
+3. 매칭 결과 저장: 최종 키워드 매칭된 기사에 대해 matched\_categories 변수 생성
 
 ---
 
@@ -171,9 +240,9 @@ $$
 
 ## 5. 데이터 전처리 및 통계적 가공 (Data Preprocessing and Statistical Treatment)
 
-### 5.1 윈저라이징 (Winsorization)
+### 5.1 이상치 제거
 
-극단치 처리를 위한 1%, 99% 분위수 기준 윈저라이징 적용:
+극단치 처리를 위한 1%, 99% 분위수 기준 적용:
 
 $$
 X_{\mathrm{winsorized}} = 
