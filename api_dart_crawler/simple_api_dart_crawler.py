@@ -17,7 +17,8 @@ import config
 
 # ----------------------- 설정 영역 -----------------------
 API_KEY = config.api_key
-BASE_SAVE_DIR = r"C:\Users\User\OneDrive\문서\개발100제\total_finance_crawling\naver_news_crawler\api_dart_crawler"
+api_key = config.api_key # 귀찮으니 나중에 통일 
+BASE_SAVE_DIR = r"/"
 PROCESSED_LOG_FILE = os.path.join(BASE_SAVE_DIR, "processed_companies.log")
 os.makedirs(BASE_SAVE_DIR, exist_ok=True)
 
@@ -28,13 +29,6 @@ END_INDEX = None
 
 # 디버깅 모드
 DEBUG_MODE = True
-
-# 기간 설정
-current_year = datetime.now().year
-start_year = current_year - 10
-end_year = current_year
-
-print(f"수집 기간: {start_year}년 ~ {end_year}년")
 
 # OpenDART API 엔드포인트
 API_CORP_CODE = "https://opendart.fss.or.kr/api/corpCode.xml"
@@ -234,11 +228,19 @@ def log_processed_company(stock_code):
         f.write(f"{stock_code}\n")
 
 # ----------------------- 메인 실행 부분 -----------------------
+# 기간 설정
+current_year = datetime.now().year # 올해
+start_year = current_year - 10 # 올해로부터 -10년으로부터
+end_year = current_year # 올해까지 
+
+print(f"수집 기간: {start_year}년 ~ {end_year}년")
+
+
 def main():
     print("🚀 OpenDART 재무데이터 수집기 v3 (상장폐지 기업 필터링 및 조기 중단 기능 추가)")
     print("=" * 60)
     
-    listed_companies_dict = fetch_all_listed_companies(API_KEY)
+    listed_companies_dict = fetch_all_listed_companies(api_key)
     if not listed_companies_dict: return
 
     processed_stock_codes = load_processed_companies()
@@ -260,7 +262,7 @@ def main():
     for stock_code, corp_info in tqdm(batch_companies, desc="기업 처리 중"):
         print(f"\n\n[처리 시작] {corp_info['corp_name']}({stock_code})")
         try:
-            df = collect_company_data(API_KEY, corp_info['corp_code'], corp_info['corp_name'], stock_code)
+            df = collect_company_data(api_key, corp_info['corp_code'], corp_info['corp_name'], stock_code)
             if df is not None and not df.empty:
                 if save_company_data(corp_info['corp_name'], stock_code, df):
                     success_count += 1
@@ -272,6 +274,9 @@ def main():
     print("\n" + "=" * 60)
     print("🎉 배치 처리 완료!")
     print(f"📋 이번 세션에서 {success_count}개 기업의 데이터를 성공적으로 저장했습니다.")
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
