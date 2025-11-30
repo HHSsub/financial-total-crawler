@@ -293,7 +293,7 @@ class SmartSentimentAnalyzer:
                 "name": "klue/roberta-large",
                 "description": "KLUE RoBERTa Large - 한국어 특화",
                 "type": "transformer",
-                "weight": 0.4,
+                "weight": 0.5,
                 "max_length": 512,
                 "batch_size": 8
             },
@@ -301,7 +301,7 @@ class SmartSentimentAnalyzer:
                 "name": "snunlp/KR-FinBERT-SC",
                 "description": "한국어 금융 특화 BERT",
                 "type": "transformer", 
-                "weight": 0.35,
+                "weight": 0.3,
                 "max_length": 512,
                 "batch_size": 8
             },
@@ -309,7 +309,7 @@ class SmartSentimentAnalyzer:
                 "name": "cardiffnlp/twitter-xlm-roberta-base-sentiment-multilingual",
                 "description": "다국어 XLM-RoBERTa",
                 "type": "pipeline",
-                "weight": 0.25,
+                "weight": 0.2,
                 "max_length": 512,
                 "batch_size": 16
             }
@@ -317,14 +317,15 @@ class SmartSentimentAnalyzer:
 
         # 설정
         self.config = {
-            "keyword_weight": 0.4,
-            "model_weight": 0.6,
+            "keyword_weight": 0.5,
+            "model_weight": 0.5,
             "normalization_strength": 0.7,
             "stability_factor": 0.1,
             "dynamic_keyword_enabled": True,
             "gpu_batch_size": 16,
             "use_mixed_precision": True,
-            "gpu_memory_fraction": 0.8
+            "gpu_memory_fraction": 0.8,
+            "neutral_threshold": 0.3  # 중립 판정 임계값
         }
 
     def get_text_hash(self, text: str) -> str:
@@ -401,7 +402,7 @@ class SmartSentimentAnalyzer:
         }
 
     def smart_keyword_analysis(self, text: str, company_name: str = None, ticker: str = None) -> Dict:
-        """스마트 키워드 분석"""
+        """스마트 키워드 분석 - 3단계 점수 반환"""
         text_lower = text.lower()
         
         keyword_data = self.get_dynamic_keywords(company_name, ticker)
@@ -432,24 +433,35 @@ class SmartSentimentAnalyzer:
         total_neg = len(neg_matches) + len(risk_matches) * 2
         
         total_signals = total_pos + total_neg
+        
+        # 3단계 점수 계산
         if total_signals == 0:
-            return {
-                "positive": 0.5,
-                "negative": 0.5,
-                "details": {
-                    "pos_matches": pos_matches,
-                    "neg_matches": neg_matches,
-                    "risk_matches": risk_matches,
-                    "keyword_source": "dynamic" if self.config["dynamic_keyword_enabled"] else "base"
-                }
-            }
-
-        positive_ratio = total_pos / total_signals
-        negative_ratio = total_neg / total_signals
+            score = 2  # 중립
+        else:
+            # 긍정/부정 비율 계산
+            pos_ratio = total_pos / total_signals
+            neg_ratio = total_neg / total_signals
+            
+            # 중립 임계값 적용
+            neutral_threshold = self.config["neutral_threshold"]
+            
+            if abs(pos_ratio - neg_ratio) <= neutral_threshold:
+                score = 2  # 중립
+            elif pos_ratio > neg_ratio:
+                # 긍정 강도에 따라 점수 조정
+                if pos_ratio >= 0.7:
+                    score = 3  # 강한 긍정
+                else:
+                    score = 2.5  # 약한 긍정
+            else:
+                # 부정 강도에 따라 점수 조정
+                if neg_ratio >= 0.7:
+                    score = 1  # 강한 부정
+                else:
+                    score = 1.5  # 약한 부정
 
         return {
-            "positive": positive_ratio,
-            "negative": negative_ratio,
+            "score": score,
             "details": {
                 "pos_matches": pos_matches,
                 "neg_matches": neg_matches,
@@ -518,7 +530,7 @@ class SmartSentimentAnalyzer:
         return loaded_models
 
     def analyze_with_single_model(self, text: str, model_key: str) -> Dict:
-        """GPU 최적화된 단일 모델 분석"""
+        """GPU 최적화된 단일 모델 분석 - 3단계 점수 반환"""
         if model_key not in self.models:
             return None
 
@@ -572,7 +584,7 @@ class SmartSentimentAnalyzer:
                         continue
                 
                 if not all_results:
-                    return {"positive": 0.5, "negative": 0.5}
+                    return {"score": 2}
                 
                 positive_scores = []
                 negative_scores = []
@@ -589,19 +601,34 @@ class SmartSentimentAnalyzer:
                         positive_scores.append(1 - score)
                 
                 if not positive_scores:
-                    return {"positive": 0.5, "negative": 0.5}
+                    return {"score": 2}
                 
                 avg_positive = np.mean(positive_scores)
                 avg_negative = np.mean(negative_scores)
                 
+                # 3단계 점수로 변환
                 total = avg_positive + avg_negative
                 if total == 0:
-                    return {"positive": 0.5, "negative": 0.5}
+                    return {"score": 2}
 
-                return {
-                    "positive": avg_positive / total,
-                    "negative": avg_negative / total
-                }
+                pos_ratio = avg_positive / total
+                neg_ratio = avg_negative / total
+                
+                # 중립 임계값 적용
+                neutral_threshold = self.config["neutral_threshold"]
+                
+                if abs(pos_ratio - neg_ratio) <= neutral_threshold:
+                    score = 2  # 중립
+                elif pos_ratio > neg_ratio:
+                    # 긍정 강도에 따라 점수 조정
+                    score = 2 + (pos_ratio - 0.5) * 2  # 2-3 사이
+                    score = min(3, max(2, score))
+                else:
+                    # 부정 강도에 따라 점수 조정
+                    score = 2 - (neg_ratio - 0.5) * 2  # 1-2 사이
+                    score = min(2, max(1, score))
+
+                return {"score": score}
 
             # Transformer 모델
             else:
@@ -649,7 +676,7 @@ class SmartSentimentAnalyzer:
                             raise e
 
                 if not all_probs:
-                    return {"positive": 0.5, "negative": 0.5}
+                    return {"score": 2}
 
                 avg_probs = np.mean(all_probs, axis=0)
 
@@ -658,20 +685,34 @@ class SmartSentimentAnalyzer:
 
                 total = positive_prob + negative_prob
                 if total == 0:
-                    return {"positive": 0.5, "negative": 0.5}
+                    return {"score": 2}
 
-                return {
-                    "positive": positive_prob / total,
-                    "negative": negative_prob / total
-                }
+                pos_ratio = positive_prob / total
+                neg_ratio = negative_prob / total
+                
+                # 3단계 점수로 변환
+                neutral_threshold = self.config["neutral_threshold"]
+                
+                if abs(pos_ratio - neg_ratio) <= neutral_threshold:
+                    score = 2  # 중립
+                elif pos_ratio > neg_ratio:
+                    # 긍정 강도에 따라 점수 조정
+                    score = 2 + (pos_ratio - 0.5) * 2  # 2-3 사이
+                    score = min(3, max(2, score))
+                else:
+                    # 부정 강도에 따라 점수 조정
+                    score = 2 - (neg_ratio - 0.5) * 2  # 1-2 사이
+                    score = min(2, max(1, score))
+
+                return {"score": score}
 
         except Exception as e:
             logger.error(f"GPU 모델 분석 실패 ({model_key}): {e}")
             self.gpu_manager.clear_gpu_cache()
-            return {"positive": 0.5, "negative": 0.5}
+            return {"score": 2}
 
     def ensemble_analysis(self, text: str) -> Dict:
-        """앙상블 분석"""
+        """앙상블 분석 - 3단계 점수 반환"""
         model_results = {}
 
         for model_key, model_info in self.ensemble_models.items():
@@ -679,38 +720,31 @@ class SmartSentimentAnalyzer:
                 result = self.analyze_with_single_model(text, model_key)
                 if result:
                     model_results[model_key] = {
-                        "result": result,
+                        "score": result["score"],
                         "weight": model_info["weight"]
                     }
 
         if not model_results:
-            return {"positive": 0.5, "negative": 0.5}
+            return {"score": 2}
 
         total_weight = sum(data["weight"] for data in model_results.values())
 
-        weighted_positive = sum(
-            data["result"]["positive"] * data["weight"]
-            for data in model_results.values()
-        ) / total_weight
-
-        weighted_negative = sum(
-            data["result"]["negative"] * data["weight"]
+        weighted_score = sum(
+            data["score"] * data["weight"]
             for data in model_results.values()
         ) / total_weight
 
         # 결과 안정화
         stability_factor = self.config["stability_factor"]
-        weighted_positive = weighted_positive * (1 - stability_factor) + 0.5 * stability_factor
-        weighted_negative = weighted_negative * (1 - stability_factor) + 0.5 * stability_factor
+        weighted_score = weighted_score * (1 - stability_factor) + 2 * stability_factor
 
         return {
-            "positive": weighted_positive,
-            "negative": weighted_negative,
-            "model_details": {model_key: data["result"] for model_key, data in model_results.items()}
+            "score": weighted_score,
+            "model_details": {model_key: data["score"] for model_key, data in model_results.items()}
         }
 
     def analyze_sentiment(self, text: str, hint_company: str = None, hint_ticker: str = None) -> Dict:
-        """메인 감성분석 함수"""
+        """메인 감성분석 함수 - 3단계 점수 시스템"""
         processed_text = self.normalize_text(text)
         
         if not processed_text:
@@ -738,49 +772,36 @@ class SmartSentimentAnalyzer:
         model_weight = self.config["model_weight"]
         normalization_strength = self.config["normalization_strength"]
 
-        final_positive = (ensemble_result["positive"] * model_weight +
-                          keyword_result["positive"] * keyword_weight)
-        final_negative = (ensemble_result["negative"] * model_weight +
-                          keyword_result["negative"] * keyword_weight)
-
-        # 정규화
-        total = final_positive + final_negative
-        if total > 0:
-            final_positive /= total
-            final_negative /= total
+        final_score = (ensemble_result["score"] * model_weight +
+                      keyword_result["score"] * keyword_weight)
 
         # 결과 안정화
-        final_positive = final_positive * normalization_strength + 0.5 * (1 - normalization_strength)
-        final_negative = final_negative * normalization_strength + 0.5 * (1 - normalization_strength)
+        final_score = final_score * normalization_strength + 2 * (1 - normalization_strength)
 
-        # 최종 정규화
-        total = final_positive + final_negative
-        final_positive /= total
-        final_negative /= total
+        # 최종 점수를 1-3 범위로 제한
+        final_score = max(1, min(3, final_score))
 
-        sentiment = "positive" if final_positive > final_negative else "negative"
-        score = final_positive - final_negative
-        confidence = max(final_positive, final_negative)
+        # 감성 라벨 결정
+        if final_score >= 2.5:
+            sentiment = "positive"
+        elif final_score <= 1.5:
+            sentiment = "negative"
+        else:
+            sentiment = "neutral"
+
+        # 신뢰도 계산 (중립에서 멀수록 높은 신뢰도)
+        confidence = abs(final_score - 2) / 1.0
 
         result = {
             "sentiment": sentiment,
-            "score": round(score, 4),
+            "score": round(final_score, 4),
             "confidence": round(confidence, 4),
             "target_company": target_company,
             "target_ticker": target_ticker,
-            "probabilities": {
-                "positive": round(final_positive, 4),
-                "negative": round(final_negative, 4)
-            },
-            "ensemble_raw": {
-                "positive": round(ensemble_result["positive"], 4),
-                "negative": round(ensemble_result["negative"], 4)
-            },
+            "ensemble_score": round(ensemble_result["score"], 4),
+            "keyword_score": round(keyword_result["score"], 4),
             "keyword_analysis": {
-                "probabilities": {
-                    "positive": round(keyword_result["positive"], 4),
-                    "negative": round(keyword_result["negative"], 4)
-                },
+                "score": round(keyword_result["score"], 4),
                 "details": keyword_result["details"]
             },
             "model_details": ensemble_result.get("model_details", {}),
@@ -846,7 +867,7 @@ class SmartSentimentAnalyzer:
 # 테스트 실행 부분
 def main():
     """GPU 최적화된 테스트 함수"""
-    print("🚀 GPU 기반 동적 키워드 생성 감성분석 시스템")
+    print("🚀 GPU 기반 동적 키워드 생성 감성분석 시스템 (3단계 점수)")
     print("=" * 60)
     
     try:
@@ -862,6 +883,7 @@ def main():
         print(f"✅ GPU 로드된 모델: {loaded_models}")
         print(f"✅ 동적 키워드 생성: {analyzer.config['dynamic_keyword_enabled']}")
         print(f"✅ 혼합 정밀도: {analyzer.config['use_mixed_precision']}")
+        print(f"✅ 3단계 점수 시스템: 긍정(3), 중립(2), 부정(1)")
 
         # GPU 상태 확인
         print(f"\n🔥 GPU 상태:")
@@ -883,11 +905,16 @@ def main():
                 "text": "대규모 데이터유출 사고가 발생해 수백만 명의 개인정보가 해킹되었습니다. 보안시스템의 취약점이 노출되면서 고객들의 피해가 심각한 상황입니다.",
                 "company": None,
                 "ticker": None
+            },
+            {
+                "text": "회사의 실적이 예상과 비슷한 수준을 기록했습니다. 매출은 전년 대비 소폭 증가했으나 큰 변화는 없는 상황입니다.",
+                "company": None,
+                "ticker": None
             }
         ]
 
         # 개별 테스트
-        print(f"\n📊 개별 분석 테스트")
+        print(f"\n📊 개별 분석 테스트 (3단계 점수)")
         print("-" * 40)
         
         for i, test_case in enumerate(test_cases, 1):
@@ -907,7 +934,7 @@ def main():
             else:
                 print(f"✅ 감성: {result['sentiment']} (점수: {result['score']}, 신뢰도: {result['confidence']})")
                 print(f"🎯 대상: {result.get('target_company', 'N/A')} ({result.get('target_ticker', 'N/A')})")
-                print(f"📈 확률: 긍정 {result['probabilities']['positive']}, 부정 {result['probabilities']['negative']}")
+                print(f"📈 점수 구성: 앙상블 {result['ensemble_score']}, 키워드 {result['keyword_score']}")
                 print(f"⚡ GPU 시간: {processing_time:.3f}초")
                 
                 keyword_details = result['keyword_analysis']['details']
@@ -934,7 +961,7 @@ def main():
         print(f"\n🔥 최종 GPU 상태:")
         analyzer.gpu_manager.monitor_gpu_memory()
 
-        print(f"\n✅ 테스트 완료!")
+        print(f"\n✅ 3단계 점수 시스템 테스트 완료!")
 
     except RuntimeError as e:
         print(f"❌ GPU 오류: {e}")
