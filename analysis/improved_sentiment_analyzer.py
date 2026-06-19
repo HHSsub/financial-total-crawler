@@ -15,6 +15,8 @@ import sqlite3
 from dataclasses import dataclass
 import gc
 import logging
+import time
+import sys
 
 # GPU 관련 import
 try:
@@ -33,7 +35,8 @@ logger = logging.getLogger(__name__)
 class GPUManager:
     """GPU 관리 및 모니터링 클래스"""
     
-    def __init__(self):
+    def __init__(self, skip_gpu_check=False):
+        self.skip_gpu_check = skip_gpu_check
         self.gpu_available = self._check_gpu_availability()
         self.device_count = 0
         self.devices = []
@@ -44,7 +47,8 @@ class GPUManager:
     def _check_gpu_availability(self) -> bool:
         """GPU 사용 가능성 체크"""
         if not torch.cuda.is_available():
-            raise RuntimeError("❌ CUDA가 사용 불가능합니다. GPU 드라이버와 CUDA를 확인하세요.")
+            # 사장님 요청: GPU 없다고 죽지 말고 조용히 CPU로 가기
+            return False
         
         if not GPU_LIBS_AVAILABLE:
             print("⚠️ GPU 모니터링 라이브러리 없음 (선택사항)")
@@ -83,9 +87,9 @@ class GPUManager:
             logger.warning(f"GPU 초기화 경고: {e}")
     
     def get_optimal_device(self) -> torch.device:
-        """최적의 GPU 디바이스 반환"""
+        """최적의 GPU 디바이스 반환 (없으면 CPU)"""
         if not self.gpu_available:
-            raise RuntimeError("GPU를 사용할 수 없습니다.")
+            return torch.device("cpu")
         
         # 메모리 사용량이 가장 적은 GPU 선택
         best_gpu = 0
@@ -132,74 +136,171 @@ class GPUManager:
         logger.info("GPU 최적화 설정 완료")
 
 
+# ── 명사 추출용 불용어 (iter2 실험에서 검증된 세트) ──────────────────
+_NOUN_STOPWORDS = {
+    "계약", "사업", "결정", "발생", "확대", "단행", "완료", "진행",
+    "구축", "도입", "관련", "기반", "운영", "서비스", "시스템", "기업",
+    "반영", "체결", "제공", "통해", "위해", "대한", "등의", "부문",
+    "관련", "현황", "분야", "방식", "부분", "경우", "상황", "방향",
+    "내용", "대상", "결과", "과정", "활동", "지원", "강화", "추진"
+}
+
+
+def _extract_key_nouns(phrase: str, min_len: int = 2) -> list:
+    """키워드 문장에서 의미 있는 핵심 명사 추출 (불용어 제거)"""
+    tokens = re.findall(r'[가-힣A-Za-z]{2,}', phrase)
+    return [t for t in tokens if t not in _NOUN_STOPWORDS and len(t) >= min_len]
+
+
+def _noun_coexist_hit(text_nospace: str, nouns: list, min_match_ratio: float = 0.6) -> bool:
+    """핵심 명사 중 min_match_ratio 이상이 텍스트에 포함되면 히트 (iter-2 검증 방식)"""
+    if len(nouns) < 2:
+        # 단일 명사는 substring 직접 매칭
+        return bool(nouns) and nouns[0].lower() in text_nospace
+    matched = sum(1 for n in nouns if n.lower() in text_nospace)
+    return matched / len(nouns) >= min_match_ratio
+
+
 class DynamicKeywordGenerator:
-    """동적 키워드 생성기"""
+    """동적 키워드 생성기 — KRX CSV 업종 직접 조회 + Noun Coexist 매핑"""
     
     def __init__(self):
         self.cache = {}
-        self.industry_cache = {}
+        self.industry_keywords_map = {}  # 업종명 → {positive, negative, neutral}
+        self.ticker_industry_map = {}    # ticker → 업종명 (KRX CSV 기반)
+        self._load_keywords_from_excel()
+        self._load_krx_ticker_map()
         
-    def get_company_info_from_ticker(self, ticker: str, company_name: str = None) -> Dict:
-        """종목코드로부터 회사 정보 추출"""
-        industry_patterns = {
-            "IT/소프트웨어": ["IT", "소프트웨어", "플랫폼", "데이터", "AI", "클라우드", "시스템", "테크"],
-            "통신": ["텔레콤", "통신", "모바일", "네트워크", "5G"],
-            "금융": ["금융", "은행", "카드", "증권", "보험", "캐피탈"],
-            "제조": ["제조", "생산", "공장", "산업", "머티리얼"],
-            "바이오": ["바이오", "제약", "의료", "헬스케어", "의학"],
-            "화학": ["화학", "케미칼", "소재"],
-            "에너지": ["에너지", "전력", "가스", "석유"],
-            "건설": ["건설", "건축", "부동산"],
-            "유통": ["유통", "리테일", "쇼핑", "마트"],
-            "전자": ["전자", "반도체", "디스플레이", "배터리"]
-        }
+    def _load_keywords_from_excel(self):
+        """엑셀 Sheet2(index=1) 고정 사용 — 50개 키워드/업종, 파싱 실패 셀 JSON 블록 자동 복구"""
+        import os, re
+        import pandas as pd
+        import json
         
-        if company_name:
-            name_lower = company_name.lower()
-            for industry, keywords in industry_patterns.items():
-                if any(keyword.lower() in name_lower for keyword in keywords):
-                    return {
-                        "industry": industry,
-                        "business_type": self._infer_business_type(company_name),
-                        "scale": self._infer_company_scale(ticker)
-                    }
+        excel_path = os.path.join(os.path.dirname(__file__), "산업군별_키워드", "산업군별_llm키워드추출.xlsx")
         
-        return {
-            "industry": "일반",
-            "business_type": "일반기업", 
-            "scale": "중견기업"
-        }
-    
-    def _infer_business_type(self, company_name: str) -> str:
-        """사업 유형 추론"""
-        name_lower = company_name.lower()
-        
-        if any(word in name_lower for word in ["시스템", "솔루션", "테크", "데이터", "ai"]):
-            return "IT서비스"
-        elif any(word in name_lower for word in ["제조", "산업", "머티리얼"]):
-            return "제조업"
-        elif any(word in name_lower for word in ["금융", "캐피탈", "투자"]):
-            return "금융업"
-        else:
-            return "일반기업"
-    
-    def _infer_company_scale(self, ticker: str) -> str:
-        """기업 규모 추론"""
-        if len(ticker) == 6:
-            first_digit = int(ticker[0])
-            if first_digit <= 1:
-                return "대기업"
-            elif first_digit <= 3:
-                return "중견기업"
+        if not os.path.exists(excel_path):
+            logger.warning(f"⚠️ 키워드 엑셀 파일을 찾을 수 없습니다: {excel_path}")
+            return
+            
+        try:
+            # ★ Sheet2(index=1) 고정 — Sheet1은 절대 사용 안 함
+            df = pd.read_excel(excel_path, sheet_name=1)
+            logger.info(f"✅ 엑셀 Sheet2 로드: {len(df)}행, 컬럼={list(df.columns)}")
+            
+            ind_col = next((c for c in df.columns if '업종' in str(c)), None)
+            kw_col  = next((c for c in df.columns if 'LLM' in str(c) or '키워드' in str(c) or 'keyword' in str(c).lower()), None)
+            
+            if not ind_col or not kw_col:
+                logger.error(f"❌ 컬럼 인식 실패: {list(df.columns)}")
+                return
+            
+            loaded_count = 0
+            for _, row in df.iterrows():
+                industry_name = str(row.get(ind_col, '')).strip()
+                raw = row.get(kw_col, '')
+                
+                if not industry_name or industry_name in ('nan', 'None', ''):
+                    continue
+                
+                # ── JSON 파싱 (실패 시 셀 내부 JSON 블록 정규식 추출 복구) ──
+                kw_data = None
+                
+                if isinstance(raw, dict):
+                    kw_data = raw
+                elif isinstance(raw, str) and raw.strip():
+                    try:
+                        kw_data = json.loads(raw)
+                    except json.JSONDecodeError:
+                        # LLM 프롬프트 텍스트 등이 앞에 붙어있는 경우 → JSON 블록만 추출
+                        match = re.search(r'\{[\s\S]+\}', raw)
+                        if match:
+                            try:
+                                kw_data = json.loads(match.group())
+                                logger.info(f"  ♻️ '{industry_name}' JSON 블록 복구 성공")
+                            except json.JSONDecodeError:
+                                logger.warning(f"  ⚠️ '{industry_name}' JSON 복구 실패 — base 키워드 사용")
+                        else:
+                            logger.warning(f"  ⚠️ '{industry_name}' JSON 블록 없음 — base 키워드 사용")
+                
+                if kw_data is None:
+                    continue
+                
+                pos_kws = kw_data.get("positive_events", [])
+                neg_kws = kw_data.get("negative_events", [])
+                self.industry_keywords_map[industry_name] = {
+                    "positive": pos_kws,
+                    "negative": neg_kws,
+                    "neutral": kw_data.get("neutral_structural_terms", []),
+                    "positive_nouns": [_extract_key_nouns(kw) for kw in pos_kws],
+                    "negative_nouns": [_extract_key_nouns(kw) for kw in neg_kws],
+                    "risk_patterns": []
+                }
+                loaded_count += 1
+                logger.debug(f"  업종 '{industry_name}': pos={len(pos_kws)}, neg={len(neg_kws)}")
+            
+            if loaded_count == 0:
+                logger.error("❌ 키워드 로드 결과 0개")
+                logger.error(f"   첫 행 샘플: {df.iloc[0].to_dict() if len(df) > 0 else 'empty'}")
             else:
-                return "중소기업"
-        return "중견기업"
+                logger.info(f"✅ {loaded_count}개 산업군 키워드 로드 완료 (Sheet2)")
+            
+        except Exception as e:
+            logger.error(f"❌ 키워드 엑셀 로딩 실패: {e}")
+
+    def _load_krx_ticker_map(self):
+        """KRX CSV에서 ticker → 업종 매핑 로드 (name regex 폐기)"""
+        import os
+        import pandas as pd
+        
+        csv_path = os.path.join(os.path.dirname(__file__),
+                                "market_table_quarterly(KRX시가총액정보_상장주식수_dart기준기업).csv")
+        if not os.path.exists(csv_path):
+            logger.warning("⚠️ KRX CSV 없음 — ticker→업종 매핑 비활성화")
+            return
+        
+        try:
+            df = pd.read_csv(csv_path, encoding="utf-8-sig", dtype=str)
+            # 컬럼명 후보: '종목코드', '티커', 'ticker', '업종', '업종명', '업종분류'
+            code_col = next((c for c in df.columns if '종목코드' in c or '티커' in c or c.lower() == 'ticker'), None)
+            ind_col  = next((c for c in df.columns if '업종' in c), None)
+            
+            if not code_col or not ind_col:
+                logger.warning(f"⚠️ KRX CSV 컬럼 인식 실패: {list(df.columns)}")
+                return
+            
+            for _, row in df.iterrows():
+                ticker = str(row[code_col]).strip().zfill(6)
+                industry = str(row[ind_col]).strip()
+                self.ticker_industry_map[ticker] = industry
+            
+            logger.info(f"✅ KRX ticker 매핑 로드: {len(self.ticker_industry_map)}개")
+        except Exception as e:
+            logger.error(f"❌ KRX CSV 로딩 실패: {e}")
+
+    def get_industry_by_ticker(self, ticker: str) -> str:
+        """ticker로 KRX 업종 직접 조회 — 매핑 실패 시 None 반환"""
+        if not ticker:
+            return None
+        padded = str(ticker).strip().zfill(6)
+        return self.ticker_industry_map.get(padded, None)
 
     def _generate_keywords_rule_based(self, company_info: Dict) -> Dict:
-        """규칙 기반 키워드 생성"""
+        """엑셀 기반 또는 규칙 기반 키워드 생성"""
         industry = company_info.get('industry', '일반')
         
-        # 산업별 키워드 매핑
+        # 1. 엑셀에서 로드된 고도화된 키워드 우선 적용
+        if industry in self.industry_keywords_map:
+            data = self.industry_keywords_map[industry]
+            return {
+                "positive_keywords": data["positive"],
+                "negative_keywords": data["negative"],
+                "industry_specific_positive": data.get("positive", []),
+                "industry_specific_negative": data.get("negative", []),
+                "risk_patterns": data.get("risk_patterns", [])
+            }
+
+        # 2. 하드코딩된 기본 산업별 키워드 (fallback)
         industry_keywords = {
             "IT/소프트웨어": {
                 "positive": ["디지털전환", "클라우드", "AI도입", "자동화", "효율화", "플랫폼확장", 
@@ -244,37 +345,77 @@ class DynamicKeywordGenerator:
             "risk_patterns": industry_data["risk_patterns"]
         }
 
-    def get_company_keywords(self, ticker: str, company_name: str) -> Dict:
-        """캐시된 키워드 반환 또는 새로 생성"""
-        cache_key = f"{ticker}_{company_name}"
-        
+    def get_industry_keywords(self, ticker: str, company_name: str = None) -> Dict:
+        """
+        ticker → KRX CSV 업종 → XLSX 키워드 세트 반환.
+        매핑 실패 시 base_keywords 반환.
+        반환 구조: {positive, negative, positive_nouns, negative_nouns, industry, source}
+        """
+        cache_key = f"kw_{ticker}_{company_name}"
         if cache_key in self.cache:
             return self.cache[cache_key]
         
-        company_info = self.get_company_info_from_ticker(ticker, company_name)
-        company_info['name'] = company_name
-        company_info['ticker'] = ticker
+        # Step 1: ticker → KRX 업종
+        industry = self.get_industry_by_ticker(ticker) if ticker else None
+        source = "krx_csv"
         
-        keywords = self._generate_keywords_rule_based(company_info)
+        # Step 2: KRX 업종 → XLSX 매핑 (exact 또는 partial)
+        kw_data = None
+        if industry:
+            # Exact match 먼저
+            if industry in self.industry_keywords_map:
+                kw_data = self.industry_keywords_map[industry]
+            else:
+                # Partial match (예: "전기·전자" ↔ "전기전자")
+                for iname, idata in self.industry_keywords_map.items():
+                    if iname.replace('·', '').replace(' ', '') in industry.replace('·', '').replace(' ', '') or \
+                       industry.replace('·', '').replace(' ', '') in iname.replace('·', '').replace(' ', ''):
+                        kw_data = idata
+                        industry = iname
+                        break
         
-        self.cache[cache_key] = {
-            "company_info": company_info,
-            "keywords": keywords,
-            "generated_at": datetime.now().isoformat()
+        if kw_data:
+            result = {
+                "positive": kw_data["positive"],
+                "negative": kw_data["negative"],
+                "positive_nouns": kw_data["positive_nouns"],
+                "negative_nouns": kw_data["negative_nouns"],
+                "industry": industry,
+                "source": source
+            }
+        else:
+            # Fallback: base keywords (단일 명사 수준, Noun Coexist에서도 작동)
+            result = self._get_base_keyword_data()
+            result["industry"] = industry or "unknown"
+            result["source"] = "base_fallback"
+        
+        self.cache[cache_key] = result
+        return result
+
+    def _get_base_keyword_data(self) -> Dict:
+        """Noun Coexist 호환 base keywords"""
+        pos = ["성장", "확대", "증가", "개선", "혁신", "성공", "달성", "향상", "상승", "호조",
+               "수주", "계약", "출시", "인증", "수상", "투자유치", "흑자", "매출증가"]
+        neg = ["감소", "하락", "부진", "악화", "우려", "타격", "충격", "위기",
+               "손실", "적자", "문제", "어려움", "침체", "위험", "실패", "중단"]
+        return {
+            "positive": pos,
+            "negative": neg,
+            "positive_nouns": [_extract_key_nouns(k) for k in pos],
+            "negative_nouns": [_extract_key_nouns(k) for k in neg],
         }
-        
-        return self.cache[cache_key]
 
 
 class SmartSentimentAnalyzer:
     """GPU 최적화된 스마트 감성분석기"""
     
-    def __init__(self, force_gpu: bool = True):
+    def __init__(self, force_gpu: bool = False):
         # GPU 관리자 초기화
-        self.gpu_manager = GPUManager()
+        self.gpu_manager = GPUManager(skip_gpu_check=not force_gpu)
         self.force_gpu = force_gpu
         
         if force_gpu and not self.gpu_manager.gpu_available:
+            logger.error("❌ GPU가 필수(--force-gpu)로 설정되었으나 사용할 수 없습니다!")
             raise RuntimeError("GPU가 필수이지만 사용할 수 없습니다!")
         
         # GPU 최적화 설정
@@ -289,19 +430,12 @@ class SmartSentimentAnalyzer:
 
         # GPU 최적화된 앙상블 모델
         self.ensemble_models = {
-            "klue-roberta-large": {
-                "name": "klue/roberta-large",
-                "description": "KLUE RoBERTa Large - 한국어 특화",
-                "type": "transformer",
-                "weight": 0.5,
-                "max_length": 512,
-                "batch_size": 8
-            },
+            # klue-roberta-large 제거: 1.3GB, EC2 디스크 부족 (451MB 여유)
             "korean-finbert": {
                 "name": "snunlp/KR-FinBERT-SC",
                 "description": "한국어 금융 특화 BERT",
-                "type": "transformer", 
-                "weight": 0.3,
+                "type": "transformer",
+                "weight": 0.6,  # 0.3 → 0.6 (klue 제거 후 재분배)
                 "max_length": 512,
                 "batch_size": 8
             },
@@ -309,7 +443,7 @@ class SmartSentimentAnalyzer:
                 "name": "cardiffnlp/twitter-xlm-roberta-base-sentiment-multilingual",
                 "description": "다국어 XLM-RoBERTa",
                 "type": "pipeline",
-                "weight": 0.2,
+                "weight": 0.4,  # 0.2 → 0.4 (klue 제거 후 재분배)
                 "max_length": 512,
                 "batch_size": 16
             }
@@ -319,28 +453,61 @@ class SmartSentimentAnalyzer:
         self.config = {
             "keyword_weight": 0.5,
             "model_weight": 0.5,
-            "normalization_strength": 0.7,
-            "stability_factor": 0.1,
             "dynamic_keyword_enabled": True,
             "gpu_batch_size": 16,
             "use_mixed_precision": True,
             "gpu_memory_fraction": 0.8,
-            "neutral_threshold": 0.3  # 중립 판정 임계값
+            # neutral_threshold: 긍/부정 판정 민감도
+            # 0.05 → pos/neg 비율 차이가 5%만 넘어도 긍/부정으로 판정
+            "neutral_threshold": 0.05,
+            # Noun Coexist 매칭 비율 (iter-2 실험에서 ratio=0.6이 94.8% 달성)
+            "noun_coexist_ratio": 0.6
         }
+
+    def reverse_sentence_order(self, text: str) -> str:
+        """강건성 테스트용: 문장 순서 뒤바꾸기"""
+        sentences = re.split(r'[.!?]\s+', text.strip())
+        sentences = [s.strip() for s in sentences if s.strip()]
+
+        if len(sentences) <= 1:
+            return text
+
+        reversed_sentences = sentences[::-1]
+
+        result = '. '.join(reversed_sentences)
+        if not result.endswith('.'):
+            result += '.'
+
+        return result
 
     def get_text_hash(self, text: str) -> str:
         """텍스트 해시 생성"""
         return hashlib.md5(text.encode('utf-8')).hexdigest()
 
     def normalize_text(self, text: str) -> str:
-        """텍스트 정규화"""
+        """텍스트 정규화 및 노이즈 제거 고도화"""
+        # 1. 일반적인 노이즈 제거 (이메일, URL, 기자명 등)
         text = re.sub(r'출처\s*[:：]\s*.*$', '', text, flags=re.MULTILINE)
         text = re.sub(r'http[s]?://[^\s]+', '', text)
         text = re.sub(r'www\.[^\s]+', '', text)
         text = re.sub(r'기자\s*[:：]?\s*[가-힣]+', '', text)
         text = re.sub(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '', text)
+        
+        # 2. 웹 브라우징/포털 노이즈 제거 (추가됨)
+        noise_patterns = [
+            r'링크복사하기', r'SNS 공유', r'바로가기', r'구독하기', r'구독하세요', r'제보',
+            r'Copyright', r'무단\s*전재', r'재배포\s*금지', r'ⓒ', r'\[\s*바로가기\s*\]',
+            r'네이버\s*뉴스', r'카카오톡', r'페이스북', r'트위터', r'유튜브',
+            r'뉴스레터', r'매콤달콤', r'이렇게\s*만들죠', r'▶',
+            r'mk\.co\.kr', r'한국경제\s*TV', r'연합뉴스\s*TV', r'조선일보',
+        ]
+        for pattern in noise_patterns:
+            text = re.sub(pattern, ' ', text, flags=re.IGNORECASE)
+            
+        # 3. 특수문자 정리
         text = re.sub(r'[^\w\s가-힣]', ' ', text)
         text = re.sub(r'\s+', ' ', text).strip()
+        
         return text
 
     def extract_company_from_text(self, text: str) -> Tuple[Optional[str], Optional[str]]:
@@ -370,104 +537,74 @@ class SmartSentimentAnalyzer:
         
         return None, tickers[0] if tickers else None
 
-    def get_dynamic_keywords(self, company_name: str, ticker: str) -> Dict:
-        """동적 키워드 생성"""
-        if not self.config["dynamic_keyword_enabled"]:
-            return self._get_base_keywords()
-        
-        if not company_name and not ticker:
-            return self._get_base_keywords()
-        
-        company_data = self.keyword_generator.get_company_keywords(
-            ticker or "000000", 
-            company_name or "Unknown"
-        )
-        
-        return company_data.get("keywords", self._get_base_keywords())
-
-    def _get_base_keywords(self) -> Dict:
-        """기본 키워드 세트"""
-        return {
-            "positive_keywords": [
-                "상승", "증가", "성장", "발전", "확대", "개선", "호조", "긍정",
-                "수익", "이익", "성과", "성공", "혁신", "달성", "향상", "활성화"
-            ],
-            "negative_keywords": [
-                "하락", "감소", "부진", "악화", "우려", "타격", "충격", "위기",
-                "손실", "적자", "문제", "어려움", "침체", "위험", "실패", "오류"
-            ],
-            "industry_specific_positive": [],
-            "industry_specific_negative": [],
-            "risk_patterns": []
-        }
+    def get_industry_keyword_data(self, company_name: str, ticker: str) -> Dict:
+        """ticker → KRX 업종 → XLSX 키워드 데이터 반환 (Noun Coexist 호환)"""
+        return self.keyword_generator.get_industry_keywords(ticker, company_name)
 
     def smart_keyword_analysis(self, text: str, company_name: str = None, ticker: str = None) -> Dict:
-        """스마트 키워드 분석 - 3단계 점수 반환"""
-        text_lower = text.lower()
+        """
+        Noun Coexist 기반 키워드 분석 (iter-2 실험에서 ratio=0.6 → 94.8% 히트 검증).
+        순수 substring 매칭 폐기 — XLSX 키워드는 문장형이라 0~1% 히트였음.
+        """
+        kw_data = self.get_industry_keyword_data(company_name, ticker)
+        industry = kw_data.get("industry", "unknown")
+        source   = kw_data.get("source", "unknown")
+        ratio    = self.config["noun_coexist_ratio"]
         
-        keyword_data = self.get_dynamic_keywords(company_name, ticker)
+        pos_kws   = kw_data.get("positive", [])
+        neg_kws   = kw_data.get("negative", [])
+        pos_nouns = kw_data.get("positive_nouns", [])
+        neg_nouns = kw_data.get("negative_nouns", [])
         
-        positive_keywords = keyword_data.get("positive_keywords", [])
-        negative_keywords = keyword_data.get("negative_keywords", [])
-        risk_patterns = keyword_data.get("risk_patterns", [])
+        text_nospace = text.replace(" ", "").lower()
         
-        # 키워드 매칭
         pos_matches = []
         neg_matches = []
-        risk_matches = []
         
-        for kw in positive_keywords:
-            if re.search(r'\b' + re.escape(kw.lower()) + r'\b', text_lower):
+        for kw, nouns in zip(pos_kws, pos_nouns):
+            if nouns and _noun_coexist_hit(text_nospace, nouns, ratio):
                 pos_matches.append(kw)
         
-        for kw in negative_keywords:
-            if re.search(r'\b' + re.escape(kw.lower()) + r'\b', text_lower):
+        for kw, nouns in zip(neg_kws, neg_nouns):
+            if nouns and _noun_coexist_hit(text_nospace, nouns, ratio):
                 neg_matches.append(kw)
         
-        for pattern in risk_patterns:
-            if re.search(pattern, text_lower):
-                risk_matches.append(pattern)
-        
-        # 가중치 계산
-        total_pos = len(pos_matches)
-        total_neg = len(neg_matches) + len(risk_matches) * 2
-        
+        total_pos    = len(pos_matches)
+        total_neg    = len(neg_matches)
         total_signals = total_pos + total_neg
         
-        # 3단계 점수 계산
+        # 키워드 매핑률 경고 (배치 로그용)
         if total_signals == 0:
-            score = 2  # 중립
+            logger.debug(f"KEYWORD_NOMATCH: ticker={ticker} industry={industry} source={source}")
+        
+        if total_signals == 0:
+            score = 2.0  # 매칭 없음 → 모델에 위임 (analyze_sentiment에서 100% 모델 사용)
         else:
-            # 긍정/부정 비율 계산
             pos_ratio = total_pos / total_signals
             neg_ratio = total_neg / total_signals
-            
-            # 중립 임계값 적용
             neutral_threshold = self.config["neutral_threshold"]
             
             if abs(pos_ratio - neg_ratio) <= neutral_threshold:
-                score = 2  # 중립
+                score = 2.0
             elif pos_ratio > neg_ratio:
-                # 긍정 강도에 따라 점수 조정
-                if pos_ratio >= 0.7:
-                    score = 3  # 강한 긍정
-                else:
-                    score = 2.5  # 약한 긍정
+                # 강도 연속 스케일: pos_ratio 0.5→1.0 을 2.0→3.0으로 매핑
+                score = 2.0 + (pos_ratio - 0.5) * 2.0
+                score = min(3.0, max(2.0, score))
             else:
-                # 부정 강도에 따라 점수 조정
-                if neg_ratio >= 0.7:
-                    score = 1  # 강한 부정
-                else:
-                    score = 1.5  # 약한 부정
-
+                # 부정 강도: neg_ratio 0.5→1.0 을 2.0→1.0으로 매핑
+                score = 2.0 - (neg_ratio - 0.5) * 2.0
+                score = min(2.0, max(1.0, score))
+        
         return {
             "score": score,
             "details": {
                 "pos_matches": pos_matches,
                 "neg_matches": neg_matches,
-                "risk_matches": risk_matches,
-                "keyword_source": "dynamic" if self.config["dynamic_keyword_enabled"] else "base",
-                "company_info": keyword_data.get("company_info", {})
+                "risk_matches": [],
+                "keyword_source": source,
+                "industry": industry,
+                "total_pos": total_pos,
+                "total_neg": total_neg
             }
         }
 
@@ -484,9 +621,11 @@ class SmartSentimentAnalyzer:
                 self.models[model_key] = pipeline(
                     "sentiment-analysis",
                     model=model_info["name"],
-                    device=self.device.index,
-                    torch_dtype=torch.float16 if self.config["use_mixed_precision"] else torch.float32,
-                    return_all_scores=True
+                    device=-1 if not self.gpu_manager.gpu_available else self.device.index,
+                    torch_dtype=torch.float32 if not self.gpu_manager.gpu_available else (torch.float16 if self.config["use_mixed_precision"] else torch.float32),
+                    return_all_scores=True,
+                    truncation=True,
+                    max_length=512
                 )
                 
             else:
@@ -495,16 +634,28 @@ class SmartSentimentAnalyzer:
                     use_fast=True
                 )
                 
+                # CPU 모드거나 accelerate가 없을 때를 대비한 안전한 로딩
+                model_kwargs = {
+                    "torch_dtype": torch.float32 if not self.gpu_manager.gpu_available else (torch.float16 if self.config["use_mixed_precision"] else torch.float32)
+                }
+                
+                # GPU 사용 시에만 device_map 사용 (accelerate 필요)
+                if self.gpu_manager.gpu_available:
+                    model_kwargs["device_map"] = "auto"
+
                 model = AutoModelForSequenceClassification.from_pretrained(
                     model_info["name"],
-                    torch_dtype=torch.float16 if self.config["use_mixed_precision"] else torch.float32,
-                    device_map="auto"
+                    **model_kwargs
                 )
                 
-                model = model.to(self.device)
+                if not self.gpu_manager.gpu_available:
+                    model = model.to("cpu")
+                else:
+                    model = model.to(self.device)
+                
                 model.eval()
                 
-                if hasattr(model, 'half') and self.config["use_mixed_precision"]:
+                if self.gpu_manager.gpu_available and hasattr(model, 'half') and self.config["use_mixed_precision"]:
                     model = model.half()
 
                 self.models[model_key] = {
@@ -586,25 +737,29 @@ class SmartSentimentAnalyzer:
                 if not all_results:
                     return {"score": 2}
                 
-                positive_scores = []
-                negative_scores = []
+                # ── multilingual-roberta: 3-class (negative/neutral/positive = LABEL_0/LABEL_1/LABEL_2) ──
+                # return_all_scores=True이므로 result_set은 3개 레이블 전체가 list로 옴
+                # 각 chunk의 score를 레이블별로 분리해서 평균냄
+                pos_chunk_scores = []
+                neg_chunk_scores = []
                 
+                # all_results에는 각 label별 {label, score} dict가 섞여있음
+                # chunk 단위로 pos/neg를 직접 추출
                 for result in all_results:
                     label = result.get("label", "").upper()
-                    score = result.get("score", 0)
+                    score = result.get("score", 0.0)
                     
                     if label in ["POSITIVE", "POS", "LABEL_2"]:
-                        positive_scores.append(score)
-                        negative_scores.append(1 - score)
+                        pos_chunk_scores.append(score)
                     elif label in ["NEGATIVE", "NEG", "LABEL_0"]:
-                        negative_scores.append(score)
-                        positive_scores.append(1 - score)
+                        neg_chunk_scores.append(score)
+                    # LABEL_1 (neutral)은 pos/neg 판정에 참여하지 않음
                 
-                if not positive_scores:
+                if not pos_chunk_scores and not neg_chunk_scores:
                     return {"score": 2}
                 
-                avg_positive = np.mean(positive_scores)
-                avg_negative = np.mean(negative_scores)
+                avg_positive = np.mean(pos_chunk_scores) if pos_chunk_scores else 0.0
+                avg_negative = np.mean(neg_chunk_scores) if neg_chunk_scores else 0.0
                 
                 # 3단계 점수로 변환
                 total = avg_positive + avg_negative
@@ -680,8 +835,19 @@ class SmartSentimentAnalyzer:
 
                 avg_probs = np.mean(all_probs, axis=0)
 
-                positive_prob = avg_probs[0] if len(avg_probs) > 0 else 0
-                negative_prob = avg_probs[1] if len(avg_probs) > 1 else 0
+                # ── KR-FinBERT-SC: 3-class 모델 ──────────────────────────────
+                # label 순서: [0]=negative, [1]=neutral, [2]=positive
+                # 절대로 avg_probs[0]을 positive로 쓰면 안 됨!
+                if len(avg_probs) >= 3:
+                    negative_prob = float(avg_probs[0])
+                    # neutral(1)은 pos/neg 점수 계산에서 제외 (중립 영향 최소화)
+                    positive_prob = float(avg_probs[2])
+                elif len(avg_probs) == 2:
+                    # 혹시 2-class 모델이 로드된 경우 (negative, positive)
+                    negative_prob = float(avg_probs[0])
+                    positive_prob = float(avg_probs[1])
+                else:
+                    return {"score": 2}
 
                 total = positive_prob + negative_prob
                 if total == 0:
@@ -734,24 +900,24 @@ class SmartSentimentAnalyzer:
             for data in model_results.values()
         ) / total_weight
 
-        # 결과 안정화
-        stability_factor = self.config["stability_factor"]
-        weighted_score = weighted_score * (1 - stability_factor) + 2 * stability_factor
-
         return {
             "score": weighted_score,
             "model_details": {model_key: data["score"] for model_key, data in model_results.items()}
         }
 
-    def analyze_sentiment(self, text: str, hint_company: str = None, hint_ticker: str = None) -> Dict:
-        """메인 감성분석 함수 - 3단계 점수 시스템"""
+    def analyze_sentiment(self, text: str, hint_company: str = None, hint_ticker: str = None, use_keywords: bool = True, reverse_order: bool = False) -> Dict:
+        """메인 감성분석 함수 - 3단계 점수 시스템 (Pure LLM 모드 지원)"""
+        # 강건성 테스트: 문장 순서 뒤바꾸기는 정규화 전 원문에 적용
+        if reverse_order:
+            text = self.reverse_sentence_order(text)
+
         processed_text = self.normalize_text(text)
-        
+
         if not processed_text:
             return {"error": "분석할 텍스트가 없습니다."}
 
-        # 캐싱 확인
-        text_hash = self.get_text_hash(processed_text)
+        # 캐싱 확인 (use_keywords, reverse_order 상태도 키에 포함)
+        text_hash = self.get_text_hash(f"{processed_text}_{use_keywords}_{reverse_order}")
         if text_hash in self.analysis_cache:
             return self.analysis_cache[text_hash]
 
@@ -761,30 +927,48 @@ class SmartSentimentAnalyzer:
         target_company = hint_company or extracted_company
         target_ticker = hint_ticker or extracted_ticker
 
-        # 앙상블 분석
+        # 앙상블 분석 (LLM 모델 자체 평가)
         ensemble_result = self.ensemble_analysis(processed_text)
         
-        # 키워드 분석
-        keyword_result = self.smart_keyword_analysis(processed_text, target_company, target_ticker)
+        # 가중치 설정
+        if use_keywords:
+            # 키워드 분석 먼저 실행
+            keyword_result = self.smart_keyword_analysis(processed_text, target_company, target_ticker)
+            keyword_score = keyword_result["score"]
+            
+            # 키워드가 하나도 매칭 안 됐으면 → 모델에 100% 위임
+            # (하드코딩 목록에 없는 표현도 중립으로 끌려내려오지 않게)
+            details = keyword_result.get("details", {})
+            has_any_match = bool(
+                details.get("pos_matches") or
+                details.get("neg_matches") or
+                details.get("risk_matches")
+            )
+            if has_any_match:
+                keyword_weight = self.config["keyword_weight"]
+                model_weight = self.config["model_weight"]
+            else:
+                # 키워드 무매칭 → 모델만 사용
+                keyword_weight = 0.0
+                model_weight = 1.0
+        else:
+            # Pure LLM 모드: 모델 점수만 100% 반영
+            keyword_weight = 0.0
+            model_weight = 1.0
+            keyword_score = 2.0
+            keyword_result = {"score": 2.0, "details": {"note": "Pure LLM mode enabled - keywords bypassed"}}
 
-        # 최종 스코어 계산
-        keyword_weight = self.config["keyword_weight"]
-        model_weight = self.config["model_weight"]
-        normalization_strength = self.config["normalization_strength"]
-
+        # 최종 스코어 계산 (bias 없음 — normalization/stability 완전 제거)
         final_score = (ensemble_result["score"] * model_weight +
-                      keyword_result["score"] * keyword_weight)
-
-        # 결과 안정화
-        final_score = final_score * normalization_strength + 2 * (1 - normalization_strength)
+                      keyword_score * keyword_weight)
 
         # 최종 점수를 1-3 범위로 제한
         final_score = max(1, min(3, final_score))
 
-        # 감성 라벨 결정
-        if final_score >= 2.5:
+        # 감성 라벨 결정 — 경계 2.4/1.6으로 설정 (너무 빡빡한 2.5/1.5 완화)
+        if final_score >= 2.4:
             sentiment = "positive"
-        elif final_score <= 1.5:
+        elif final_score <= 1.6:
             sentiment = "negative"
         else:
             sentiment = "neutral"
@@ -827,12 +1011,12 @@ class SmartSentimentAnalyzer:
 
         return result
 
-    def batch_analyze_gpu(self, texts: List[str], companies: List[str] = None, tickers: List[str] = None) -> List[Dict]:
+    def batch_analyze_gpu(self, texts: List[str], companies: List[str] = None, tickers: List[str] = None, use_keywords: bool = True) -> List[Dict]:
         """GPU 최적화된 배치 분석"""
         if not texts:
             return []
         
-        logger.info(f"GPU 배치 분석 시작: {len(texts)}개 텍스트")
+        logger.info(f"GPU 배치 분석 시작: {len(texts)}개 텍스트 (Keywords: {use_keywords})")
         
         companies = companies or [None] * len(texts)
         tickers = tickers or [None] * len(texts)
@@ -848,7 +1032,7 @@ class SmartSentimentAnalyzer:
             batch_results = []
             for text, company, ticker in zip(batch_texts, batch_companies, batch_tickers):
                 try:
-                    result = self.analyze_sentiment(text, company, ticker)
+                    result = self.analyze_sentiment(text, company, ticker, use_keywords=use_keywords)
                     batch_results.append(result)
                 except Exception as e:
                     logger.error(f"배치 분석 오류: {e}")
@@ -866,108 +1050,141 @@ class SmartSentimentAnalyzer:
 
 # 테스트 실행 부분
 def main():
-    """GPU 최적화된 테스트 함수"""
-    print("🚀 GPU 기반 동적 키워드 생성 감성분석 시스템 (3단계 점수)")
+    """CLI 인자 지원 및 GPU 테스트"""
+    import argparse
+    parser = argparse.ArgumentParser(description="GPU 기반 동적 키워드 생성 감성분석 시스템")
+    parser.add_argument("--pure-llm", action="store_true", help="키워드 분석 없이 모델 점수만 반영")
+    parser.add_argument("--test", action="store_true", help="내장 테스트 케이스 실행")
+    parser.add_argument("--cpu", action="store_true", help="GPU 대신 CPU 사용 (로컬 테스트용)")
+    parser.add_argument("--db", type=str, default="news_fulltext_extract_20250915_171004.db", help="대상 DB 경로")
+    args = parser.parse_args()
+
+    # 사장님 요청: 기본적으로 GPU 시도하되 없으면 조용히 CPU로 전환 (강제성 제거)
+    if args.cpu:
+        print("💻 사용자에 의해 CPU 모드로 강제 설정되었습니다.", flush=True)
+        force_gpu = False
+    else:
+        # 하드웨어 체크 실패 시 크래시를 방지하기 위해 SmartSentimentAnalyzer 내부에서 처리
+        force_gpu = False # False로 주어야 RuntimeError가 발생하지 않음
+        print("🚀 감성분석 시스템 시작 (GPU 확인 중...)", flush=True)
+
+    print(f"🚀 모드 설정 (Pure LLM: {args.pure_llm})")
     print("=" * 60)
     
     try:
-        # GPU 필수 모드로 분석기 생성
-        analyzer = SmartSentimentAnalyzer(force_gpu=True)
+        # 분석기 생성
+        analyzer = SmartSentimentAnalyzer(force_gpu=force_gpu)
         
-        print("\n📦 GPU에 모델 로딩 중...")
+        device_name = "GPU" if analyzer.gpu_manager.gpu_available else "CPU"
+        print(f"✅ 구동 환경: {device_name} 모드", flush=True)
+        
+        print(f"\n📦 {device_name}에 모델 로딩 중...", flush=True)
         loaded_models = analyzer.load_all_models()
         if not loaded_models:
-            print("❌ 모델 로딩 실패")
+            print(f"❌ {device_name} 모델 로딩 실패", flush=True)
             return
         
-        print(f"✅ GPU 로드된 모델: {loaded_models}")
-        print(f"✅ 동적 키워드 생성: {analyzer.config['dynamic_keyword_enabled']}")
-        print(f"✅ 혼합 정밀도: {analyzer.config['use_mixed_precision']}")
+        print(f"✅ 로드된 모델: {loaded_models}", flush=True)
+        print(f"✅ 분석 모드: {'Pure LLM' if args.pure_llm else '하이브리드 (키워드 매칭 포함)'}", flush=True)
         print(f"✅ 3단계 점수 시스템: 긍정(3), 중립(2), 부정(1)")
 
         # GPU 상태 확인
-        print(f"\n🔥 GPU 상태:")
         analyzer.gpu_manager.monitor_gpu_memory()
 
-        # 테스트 케이스
-        test_cases = [
-            {
-                "text": "신세계아이앤씨 052860이 국가정보원 주관 보안기능 확인서를 획득했다고 발표했습니다. 스파로스 CMP 플랫폼의 보안성이 국가 차원에서 인정받았으며, 이는 회사의 기술력을 입증하는 중요한 성과입니다.",
-                "company": "신세계아이앤씨",
-                "ticker": "052860"
-            },
-            {
-                "text": "휴맥스 115160의 신제품 셋톱박스가 글로벌 시장에서 큰 호응을 얻고 있습니다. 스마트홈 기술과 AI 기능이 탑재된 이번 제품은 매출 증가에 크게 기여할 것으로 전망됩니다.",
-                "company": "휴맥스", 
-                "ticker": "115160"
-            },
-            {
-                "text": "대규모 데이터유출 사고가 발생해 수백만 명의 개인정보가 해킹되었습니다. 보안시스템의 취약점이 노출되면서 고객들의 피해가 심각한 상황입니다.",
-                "company": None,
-                "ticker": None
-            },
-            {
-                "text": "회사의 실적이 예상과 비슷한 수준을 기록했습니다. 매출은 전년 대비 소폭 증가했으나 큰 변화는 없는 상황입니다.",
-                "company": None,
-                "ticker": None
-            }
-        ]
+        if args.test:
+            # 테스트 케이스 실행
+            test_cases = [
+                {
+                    "text": "신세계아이앤씨 052860이 국가정보원 주관 보안기능 확인서를 획득했다고 발표했습니다. 스파로스 CMP 플랫폼의 보안성이 국가 차원에서 인정받았으며, [기사 바로가기] http://example.com/news/123",
+                    "company": "신세계아이앤씨",
+                    "ticker": "052860"
+                },
+                {
+                    "text": "휴맥스 115160의 신제품 셋톱박스가 글로벌 시장에서 큰 호응을 얻고 있습니다. 스마트홈 기술과 AI 기능이 탑재된 이번 제품은 매출 증가에 크게 기여할 것으로 전망됩니다. ⓒCopyright All rights reserved.",
+                    "company": "휴맥스", 
+                    "ticker": "115160"
+                }
+            ]
 
-        # 개별 테스트
-        print(f"\n📊 개별 분석 테스트 (3단계 점수)")
-        print("-" * 40)
-        
-        for i, test_case in enumerate(test_cases, 1):
-            print(f"\n테스트 {i}: {test_case['text'][:50]}...")
+            print(f"\n📊 분석 테스트 (Pure LLM: {args.pure_llm})")
+            print("-" * 40)
             
-            start_time = datetime.now()
-            result = analyzer.analyze_sentiment(
-                test_case['text'],
-                hint_company=test_case['company'],
-                hint_ticker=test_case['ticker']
-            )
-            end_time = datetime.now()
-            processing_time = (end_time - start_time).total_seconds()
-            
-            if "error" in result:
-                print(f"❌ 오류: {result['error']}")
-            else:
-                print(f"✅ 감성: {result['sentiment']} (점수: {result['score']}, 신뢰도: {result['confidence']})")
-                print(f"🎯 대상: {result.get('target_company', 'N/A')} ({result.get('target_ticker', 'N/A')})")
-                print(f"📈 점수 구성: 앙상블 {result['ensemble_score']}, 키워드 {result['keyword_score']}")
-                print(f"⚡ GPU 시간: {processing_time:.3f}초")
+            for i, test_case in enumerate(test_cases, 1):
+                start_time = datetime.now()
+                result = analyzer.analyze_sentiment(
+                    test_case['text'],
+                    hint_company=test_case['company'],
+                    hint_ticker=test_case['ticker'],
+                    use_keywords=not args.pure_llm
+                )
+                processing_time = (datetime.now() - start_time).total_seconds()
                 
-                keyword_details = result['keyword_analysis']['details']
-                print(f"🔍 키워드: +{len(keyword_details.get('pos_matches', []))}, -{len(keyword_details.get('neg_matches', []))}")
+                print(f"\n테스트 {i}: {result['sentiment']} (점수: {result['score']})")
+                print(f"cleaned_text: {analyzer.normalize_text(test_case['text'])[:50]}...")
+                print(f"⚡ {'GPU' if analyzer.gpu_manager.gpu_available else 'CPU'} 시간: {processing_time:.3f}초")
+        else:
+            # 24시간 감시 모드 실행
+            db_path = args.db
+            print(f"\n🚀 24시간 DB 감시 분석 시작 (DB: {db_path})", flush=True)
+            
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            # 결과 컬럼 추가 (없을 경우만)
+            try:
+                cursor.execute("ALTER TABLE articles ADD COLUMN imp_sentiment TEXT")
+                cursor.execute("ALTER TABLE articles ADD COLUMN imp_score REAL")
+                cursor.execute("ALTER TABLE articles ADD COLUMN imp_date TEXT")
+                conn.commit()
+                print("✅ DB 테이블 구조 업데이트 완료 (컬럼 추가)")
+            except sqlite3.OperationalError:
+                pass # 이미 존재함
+                
+            batch_count = 0
+            while True:
+                # 미분석 데이터 가져오기 (배치 단위)
+                cursor.execute("""
+                    SELECT link, title, full_content, ticker 
+                    FROM articles 
+                    WHERE imp_score IS NULL 
+                    ORDER BY pub_date DESC 
+                    LIMIT 20
+                """)
+                rows = cursor.fetchall()
+                
+                if not rows:
+                    if batch_count % 10 == 0:
+                        print(f"[{datetime.now()}] 새로운 기사가 없습니다. 대기 중...", flush=True)
+                    batch_count += 1
+                    time.sleep(60)
+                    continue
+                
+                print(f"[{datetime.now()}] {len(rows)}개 기사 분석 수행 중...", flush=True)
+                
+                for link, title, content, ticker in rows:
+                    try:
+                        text = f"{title}\n{content or ''}"
+                        result = analyzer.analyze_sentiment(text, hint_ticker=ticker, use_keywords=not args.pure_llm)
+                        
+                        cursor.execute("""
+                            UPDATE articles 
+                            SET imp_sentiment = ?, imp_score = ?, imp_date = ? 
+                            WHERE link = ?
+                        """, (result['sentiment'], result['score'], result['analysis_time'], link))
+                        
+                        # PM2 로그에 실시간 출력 (사장님이 진행 상황을 볼 수 있게 함)
+                        print(f"  - [{result['sentiment']}] {title[:40]}... (Score: {result['score']})", flush=True)
+                        
+                    except Exception as e:
+                        logger.error(f"건별 분석 오류: {e}")
+                
+                conn.commit()
+                batch_count += 1
+                # GPU 메모리 정기 청소
+                analyzer.gpu_manager.clear_gpu_cache()
 
-        # 배치 테스트
-        print(f"\n🚀 GPU 배치 분석 테스트")
-        print("-" * 40)
-        
-        batch_texts = [case['text'] for case in test_cases]
-        batch_companies = [case['company'] for case in test_cases]
-        batch_tickers = [case['ticker'] for case in test_cases]
-        
-        start_time = datetime.now()
-        batch_results = analyzer.batch_analyze_gpu(batch_texts, batch_companies, batch_tickers)
-        end_time = datetime.now()
-        batch_time = (end_time - start_time).total_seconds()
-        
-        print(f"✅ 배치 완료: {len(batch_results)}개 결과")
-        print(f"⚡ 총 시간: {batch_time:.3f}초")
-        print(f"🚀 처리속도: {len(batch_results)/batch_time:.2f}개/초")
-
-        # 최종 GPU 상태
-        print(f"\n🔥 최종 GPU 상태:")
-        analyzer.gpu_manager.monitor_gpu_memory()
-
-        print(f"\n✅ 3단계 점수 시스템 테스트 완료!")
-
-    except RuntimeError as e:
-        print(f"❌ GPU 오류: {e}")
-        print("CUDA 드라이버와 GPU 설정을 확인하세요.")
     except Exception as e:
-        print(f"❌ 시스템 오류: {e}")
+        print(f"❌ 치명적 오류: {e}")
         import traceback
         traceback.print_exc()
 
